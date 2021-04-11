@@ -1,0 +1,768 @@
+%{
+  #include <iostream>
+  #include "compsrc.h"
+  #include "hw3_output.hpp"
+  using namespace output;
+  
+  vector<FormalDecl> funcArgs;
+  int loopCount = 0;
+  string retType;
+  string funcId = "";
+  bool argsCheck(string fName, vector<Exp> args);
+  void insertArgs(vector<FormalDecl> args);
+  
+  vector<string> loopCond;
+  vector<AddressList> loopBreakList;
+  extern CodeBuffer& buffer;
+  
+  void yyerror(const char* c);
+  extern int yylineno;
+  extern int yylex();
+  using namespace std;
+%}
+
+%token VOID INT BYTE BOOL TRUE FALSE RETURN BREAK CONTINUE IF WHILE DOTS SET SC ID STRING COMMA NUM B 
+%right ASSIGN
+%left OR
+%left AND
+%left EQUALS
+%left IN
+%nonassoc RELOP
+%left ADD
+%left MULT
+%right NOT
+%left LBRACKET
+%left RBRACKET
+%left LPAREN
+%left RPAREN
+%left LBRACE
+%left RBRACE
+%nonassoc STOP
+%nonassoc ELSE
+
+%%
+
+Program: INIT Funcs											{printProductionRule(1);
+																mainCheck();
+																$$ = new Node("", "");
+																closeScope();
+															}
+INIT:                                                       {
+																init();
+															}
+Funcs:														{printProductionRule(2);
+																$$ = new Node("", "");
+															}
+		|FuncDecl Funcs										{printProductionRule(3);
+																$$ = new Node("", "");
+															}
+			
+FuncDecl: RetType ID                                        {
+																funcId = $2->lex;
+															}
+	
+        LPAREN Formals RPAREN           	           		{
+																Formals* formals = dynamic_cast<Formals*>($5);
+																vector<FormalDecl> args = formals->args; 
+																string symType;
+																for (int i = 0 ; i < args.size(); i++){
+																		symType += args[i].type + ",";
+																}
+																symType += $1->type + ";";
+																insertOffset(funcId, symType, 0,"");
+																newScope();         
+																llvmFuncDecl($1->type, $2->lex, args);//also creates var regs for arguments 
+																insertArgs(args);//im sorry for doubting you :(
+																funcId = "";
+																// pt();
+																
+															}
+        LBRACE Statements RBRACE							{printProductionRule(4);
+																//string end = buffer.genLabel();
+																//buffer.bpatch($9->nextList, end);//bpatch last block
+																string lazyRet = (retType == "VOID" ? "void" : "i32 0");
+																buffer.emit("ret "+ lazyRet); // for all the lazy bastards
+																buffer.emit("}");
+																retType = "";
+																closeScope();
+															}                                            
+RetType: Type												{printProductionRule(5);
+																retType = $1->type;
+																$$ = new Node("", $1->type);
+																if ($1->type == "SET"){
+																	$$->type = getSetType($1->setL, $1->setR);
+																}
+															}
+		|VOID									            	{printProductionRule(6);
+																retType = "VOID";
+																$$ = new Node("", "VOID");
+															}
+Formals:													{printProductionRule(7);
+																funcArgs =  vector<FormalDecl>();
+																$$ = new Formals(vector<FormalDecl>());
+															}
+		|FormalsList										{printProductionRule(8);
+																FormalsList* fl = dynamic_cast<FormalsList*>($1);
+																vector<FormalDecl> args = fl->args;
+																vector<FormalDecl> temp  =  vector<FormalDecl>();
+																int size = args.size();
+																for (int i = 0; i < size; i++){//reverse the shit out of it
+																	temp.push_back(args[args.size() - i -1]);
+																} 
+																for (int i = 0; i < size; i++){
+																	args[i] = temp[i];
+																}
+																for(int i = 0; i< args.size(); i++){
+																	//cout<< args[i].type << " " ;
+																}
+																// cout<< endl;
+																//now its reversed relax
+																$$ = new Formals(args);
+															}
+FormalsList: FormalDecl										{printProductionRule(9);
+																if(nameDefined($1->lex) || $1->lex == funcId){
+																	errorDef(yylineno, $1->lex);
+																exit(0);
+																}
+																vector<FormalDecl> args = vector<FormalDecl>();
+																string type = $1->type;
+																if ($1->type == "SET"){
+																	type = getSetType($1->setL, $1->setR);
+																}
+																args.push_back(FormalDecl($1->lex, type, $1->var));
+																$$ = new FormalsList(args);}
+		|FormalDecl COMMA FormalsList			    		{printProductionRule(10);
+																if(nameDefined($1->lex) || $1->lex == funcId){
+																	errorDef(yylineno, $1->lex);
+																	exit(0);
+																}
+																FormalsList* fl = dynamic_cast<FormalsList*>($3);
+																vector<FormalDecl> args = fl->args;
+																string type = $1->type;
+																if ($1->type == "SET"){
+																	type = getSetType($1->setL, $1->setR);
+																}
+																args.push_back(FormalDecl($1->lex, type, $1->var));
+																$$ = new FormalsList(args);
+															}
+FormalDecl: Type ID 										{printProductionRule(11);
+																$$ = new Node($2->lex, $1->type);
+																$$->setL = $1->setL;
+																$$->setR = $1->setR;
+															}
+Statements: Statement										{printProductionRule(12);
+																$$ = new Node("", "");
+																//int gotoNext = buffer.emit("br label @");
+																//$$->nextList = buffer.merge($1->nextList,buffer.makelist({gotoNext, FIRST}));
+																//$$->nextList = $1->nextList;
+															}
+		|Statements Statement                            	{printProductionRule(13);
+																$$ = new Node("", "");
+																//buffer.bpatch($1->nextList, $2->lex);
+																//int gotoNext = buffer.emit("br label @");
+																//$$->nextList = buffer.merge($3->nextList, buffer.makelist({gotoNext, FIRST}));
+																//$$->nextList = $3->nextList;
+															}
+Statement: LBRACE NEWSCOPE Statements RBRACE               	{printProductionRule(14);
+																$$ = new Node("", "");
+																$$->nextList = $3->nextList;
+																closeScope();
+															}
+		|Type ID SC                                        	{printProductionRule(15);
+																if (nameDefined($2->lex)){
+																	errorDef(yylineno, $2->lex);
+																	exit(0);
+																}
+																if ($1->type == "SET"){//fucking set shit
+																	string type     = getSetType ($1->setL, $1->setR);
+																	string newSet = llvmSet($1->setL, $1->setR);
+																	Entry e  = insertInCurrent($2->lex, type, "");
+																	string ptr = llvmVarPtr(e.offset);
+																	llvmStoreSet(newSet, $1->setL, $1->setR, ptr);
+																}else{
+																	string type = $1->type;
+																	string llvmtype = llvmType($1->type);
+																	string defaultValue = "0";
+																	Entry e  = insertInCurrent($2->lex, type, "");
+																	string ptr = llvmVarPtr(e.offset);
+																	$2->type = $1->type;// legacy
+																	$$ = new Node("", "");
+																	buffer.emit("store "+ llvmtype +" "+defaultValue + ", " + llvmtype + "* " + ptr); 
+																}
+															}
+		|Type ID ASSIGN Exp SC								{printProductionRule(16);
+																if (nameDefined($2->lex)){
+																	errorDef(yylineno, $2->lex);
+																	exit(0);
+																}
+																if (!($1->type == "INT" && $4->type == "BYTE") && $1->type != $4->type){//sets of the same type? piazza
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																string type = ($1->type == "SET" ? getSetType($1->setL, $1->setR) :
+																			   $1->type);
+																Entry e = insertInCurrent($2->lex, type, "");
+																
+																if ($1->type == "SET" && $3->type == "SET"){//set assign fucking loops
+																	string ptr = llvmVarPtr(e.offset);
+																	string newSet = copySet(dynamic_cast<Exp*>($4));
+																	$$ = new Node("", "");
+																	llvmStoreSet(newSet, $3->setL, $3->setR, ptr);
+																}else {
+																	
+																	string llvmtype = llvmType($1->type);
+																	string var = $4->var;
+																	if (e.type == "INT" && $4->type == "BYTE"){
+																		var = llvmIntToByte(var);
+																	}else if ($4->type == "BOOL"){
+																			var = llvmGetBoolVar(dynamic_cast<Exp*>($4));
+																		}
+																	string ptr = llvmVarPtr(e.offset);
+																	buffer.emit("store i32 " + var + ", i32* " + ptr);
+																}
+																$$ = new Node("", "");
+																
+															}
+		|ID ASSIGN Exp SC                                  	{printProductionRule(17);
+																if (!Defined($1->lex, true)){
+																	errorUndef(yylineno, $1->lex);
+																	exit(0);
+																}
+																Entry * e = getSymEntry($1->lex);
+																//cout << "id type is "+e->type + " exptype " + $3->type <<endl;
+																e->type = (e->type[0] == 'S' ? "SET" : e->type); 
+																if (!(e->type == "INT" && $3->type == "BYTE") && e->type != $3->type){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																if (e->type == "SET" && $3->type == "SET"){//set assign fucking loops
+																	string ptr = llvmVarPtr(e->offset);
+																	string newSet = copySet(dynamic_cast<Exp*>($3));
+																	string newSetType = getSetType($3->setL,$3->setR);
+																	updateSymType($1->lex, newSetType);
+																	llvmStoreSet(newSet, $3->setL, $3->setR, ptr);
+																}else{
+																	string type = llvmType($1->type);
+																	string var = $3->var;
+																	if (e->type == "INT" && $3->type == "BYTE"){
+																		var = llvmIntToByte(var);
+																	}else if ($3->type == "BOOL"){
+																		var = llvmGetBoolVar(dynamic_cast<Exp*>($3));
+																	}
+																	string ptr = llvmVarPtr(e->offset);
+																	buffer.emit("store "+ type +" " + var + ", " + type + "* " + ptr);
+																}
+																$$ = new Node("", "");
+															//cout<< "updated[" + getSymEntry($1->lex)->type + "]" <<endl;
+															}
+		|Call SC                                            {printProductionRule(18);
+																$$ = new Node("", "");
+															}
+		|RETURN SC                                         	{printProductionRule(19);
+																if (retType != "VOID"){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																$$ = new Node("", "");
+																buffer.emit("ret void");
+															}
+		|RETURN Exp SC                                      {printProductionRule(20);
+																if (!(retType == "INT" && $2->type == "BYTE") &&
+																	retType != $2->type){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																string retVar = $2->var;
+																if ($2->type == "BOOL"){
+																	retVar = llvmGetBoolVar(dynamic_cast<Exp*>($2));
+																}else if ($2->type == "SET"){
+																	retVar = llvmSetToInt(retVar, $2->setL, $2->setR);
+																}
+																$$ = new Node("", ""); 
+																buffer.emit("ret " +llvmType($2->type) + " " + retVar);
+															}
+		|IF IFOPEN LPAREN Exp RPAREN M Statement %prec STOP {printProductionRule(21);
+																closeScope();									
+																$$ = new Node("", "");
+																buffer.bpatch($4->trueList, $6->lex);
+																int jumpToEnd = llvmBr();
+																string endLabel = buffer.genLabel();
+																
+																buffer.bpatch(buffer.makelist({jumpToEnd, FIRST}), endLabel);
+																buffer.bpatch($4->falseList, endLabel);
+																buffer.bpatch($7->nextList, endLabel);
+															}
+																
+		|IF IFOPEN LPAREN Exp RPAREN M Statement ELSE N IFCLOSE ELSEOPEN M Statement
+															{printProductionRule(22);
+																closeScope();
+																buffer.bpatch($4->trueList,   $6->lex);//first M
+																buffer.bpatch($4->falseList, $12->lex);//last M
+																$$= new Node("","");
+																int jumpToEnd = llvmBr();
+																string endLabel = buffer.genLabel();
+																
+																buffer.bpatch(buffer.makelist({jumpToEnd, FIRST}), endLabel);
+																buffer.bpatch($9->nextList, endLabel);//N
+																buffer.bpatch($13->nextList, endLabel);//last statement
+																//$$->nextList = buffer.makelist({next, FIRST});
+																//$$->nextList = buffer.merge(buffer.merge($7->nextList, $13->nextList), $9->nextList);
+															}
+		|WHILE WHILEOPEN LPAREN N M Exp RPAREN INLOOP M 	{
+																loopCond.push_back($5->lex);           //for continues to come
+																AddressList addList;
+																loopBreakList.push_back(addList);//for breaks    to come
+															}
+		Statement 											{printProductionRule(23);
+																if ($6->type != "BOOL"){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																loopCount--;
+																closeScope();
+																$$ = new Node("", "");
+																int jumpToStart = llvmBr();
+																buffer.bpatch(buffer.makelist({jumpToStart, FIRST}), $5->lex);//statement to M
+																
+																int jumpToEnd   = llvmBr();
+																string endLabel = buffer.genLabel();
+																buffer.bpatch(buffer.makelist({jumpToEnd, FIRST}), endLabel); 
+																
+																//$$->nextList = buffer.merge($5->falseList, loopBreakList.back());
+																buffer.bpatch($4->nextList, $5->lex);//N to M
+																buffer.bpatch($6->trueList, $9->lex);//exp to M 
+																buffer.bpatch($6->falseList, endLabel);//exp to end
+																
+																buffer.bpatch(loopBreakList.back(), endLabel);//breaks to end
+																loopCond.pop_back();
+																loopBreakList.pop_back();
+															}
+		|BREAK SC                                           {printProductionRule(24);
+																if (loopCount <= 0){
+																	errorUnexpectedBreak(yylineno);
+																	exit(0);
+																}
+																$$ = new Node("", "");
+																int loc = buffer.emit("br label @");
+																AddressList newBreakList = buffer.merge(loopBreakList.back(), buffer.makelist({loc, FIRST})); 
+																loopBreakList.pop_back();
+																loopBreakList.push_back(newBreakList);
+															}
+		|CONTINUE SC                                        {printProductionRule(25);
+																if (loopCount <= 0){
+																	errorUnexpectedContinue(yylineno);
+																	exit(0);
+																}
+																$$ = new Node("", "");
+																buffer.emit("br label %" + loopCond.back());
+															}
+INLOOP:                                                    	{
+																loopCount++;
+															}
+NEWSCOPE:                                                   {
+																newScope();
+															}
+IFOPEN:                                              		{
+																newScope();
+															}
+IFCLOSE:                                             		{
+																closeScope();
+															}
+ELSEOPEN:                                            		{
+																newScope();
+															}                                                                                                          
+WHILEOPEN:                                           		{
+																newScope();
+															}
+Call:	ID LPAREN ExpList RPAREN                            {printProductionRule(26);
+																if (!Defined($1->lex, false)){
+																	errorUndefFunc(yylineno, $1->lex);
+																	exit(0);
+																}
+																vector<Exp> args = (dynamic_cast<ExpList*>($3))->args;
+																vector<Exp> temp = vector<Exp>();
+																for (int i = 0; i < args.size(); i++){//reverse the shit out of it
+																	temp.push_back(args[args.size() - i -1]);
+																} 
+																for (int i = 0; i < args.size(); i++){
+																	args[i] = temp[i];
+																}
+																for (int i = 0 ; i < args.size(); i++){
+																	//buffer.emit("inloop " +args[i].lex +", "+args[i].type + ", " + args[i].var);
+																}
+																if (!argsCheck($1->lex, args)){
+																	vector<string> types = getArgsList($1->lex);
+																	types.pop_back();
+																	errorPrototypeMismatch(yylineno, $1->lex, types);
+																	exit(0);
+																}
+																string funcType = getFunctype($1->lex);
+																string funcResult = "kj";
+																string funcCall = llvmCall($1->lex, funcType, args);
+																if (funcType == "VOID"){
+																	funcResult = "";
+																	//buffer.emit(" im empty");
+																	buffer.emit(funcCall);
+																}
+																else
+																{
+																	funcResult = freshVar();
+																	buffer.emit(funcResult + " = " + funcCall);
+																}
+																 //  cout<< "after funccall " + funcType <<endl;
+																$$ = new Node($1->lex, funcType, funcResult);
+																if (funcType[0] == 'S'){
+																	$$->type = "SET";
+																	$$->setL = getSetL(funcType);
+																	$$->setR = getSetR(funcType);
+																	$$->var = llvmIntToSet(funcResult, $$->setL, $$->setR);
+																}
+															}
+		|ID LPAREN RPAREN                                   {printProductionRule(27);
+																vector<Exp> args = vector<Exp>();
+																if (!Defined($1->lex, false)){
+																	errorUndefFunc(yylineno, $1->lex);
+																	exit(0);
+																}
+																if (!argsCheck($1->lex, args)){
+																	vector<string> types = getArgsList($1->lex);
+																	types.pop_back();
+																	errorPrototypeMismatch(yylineno, $1->lex, types);
+																	exit(0);
+																}
+																string funcType = getFunctype($1->lex);
+																string funcResult;
+																string funcCall = llvmCall($1->lex, funcType, args);
+																if (funcType == "VOID"){
+																	funcResult = "";
+																	buffer.emit(funcCall);
+																}
+																else
+																{
+																	funcResult = freshVar();
+																	buffer.emit(funcResult + " = " + funcCall);
+																}
+																$$ = new Node($1->lex, funcType, funcResult);
+																if (funcType[0] == 'S'){
+																	$$->type = "SET";
+																	$$->setL = getSetL(funcType);
+																	$$->setR = getSetR(funcType);
+																	$$->var = llvmIntToSet(funcResult, $$->setL, $$->setR);
+																}
+															}
+ExpList:	Exp     										{printProductionRule(28);
+																vector<Exp> args = vector<Exp>(); 
+																Exp* expPtr = dynamic_cast<Exp*>($1);
+																if ($1->type == "BOOL"){
+																	expPtr->var = llvmGetBoolVar(expPtr);
+																}
+																else if ($1->type == "SET"){
+																	expPtr->var  = llvmSetToInt(expPtr->var, expPtr->setL, expPtr->setR);
+																	expPtr->type = getSetType($1->setL,$1->setR);
+																	
+																}
+																Exp exp = *expPtr;
+																args.push_back(exp);
+																for (int i = 0 ; i < args.size(); i++){
+																	//buffer.emit("inloop " +args[i].lex +", "+args[i].type + ", " + args[i].var);
+																}
+																$$ = new ExpList(args);
+															}
+		|Exp COMMA 											{
+																Exp* expPtr = dynamic_cast<Exp*>($1);
+																if (expPtr->type == "BOOL"){
+																	expPtr->var = llvmGetBoolVar(expPtr);
+																}else if ($1->type == "SET"){
+																	expPtr->var  = llvmSetToInt(expPtr->var, expPtr->setL, expPtr->setR);
+																	expPtr->type = getSetType($1->setL,$1->setR);
+																}
+																$1 = expPtr;
+															}
+		
+		
+		ExpList	  		                                    {printProductionRule(29);
+																ExpList* expList = dynamic_cast<ExpList*>($4);
+																$$ = new ExpList(expList->args);
+																Exp* expPtr = dynamic_cast<Exp*>($1);
+																Exp exp = *expPtr;
+																(dynamic_cast<ExpList*>($$))->args.push_back(exp);
+															}
+Type:	INT                                                 {printProductionRule(30);
+																$$ = new Node("", "INT");
+															}
+		|BYTE                                               {printProductionRule(31);
+																$$ = new Node("", "BYTE");
+																}
+		|BOOL							                   	{printProductionRule(32);
+																$$ = new Node("", "BOOL");
+															}
+		|SET LBRACKET NUM DOTS NUM RBRACKET                 	{printProductionRule(33);
+																if (!setCheck($3->lex, $5->lex)){
+																	errorSetTooLarge(yylineno, $3->lex, $5->lex);
+																	exit(0); 
+																}
+																$$ = new Node("", "SET");
+																$$->setL = $3->lex;
+																$$->setR = $5->lex;
+															}
+Exp:	LPAREN Exp RPAREN                                  	{printProductionRule(34);
+																$$ = new Exp("", $2->type, $2->var);
+																$$->trueList = $2->trueList;
+																$$->falseList = $2->falseList;
+																$$->setL = $2->setL;
+																$$->setR = $2->setR;
+															}
+		|Exp MULT Exp										{printProductionRule(35);
+																if (!specialDup($1->type,$3->type)  &&
+																	$1->type == "BOOL"   || $3->type == "BOOL"   ||
+																	$1->type == "STRING" || $3->type == "STRING" ||
+																($1->type == "SET"    && $3->type == "SET") ){
+																	errorMismatch(yylineno);
+																exit(0);
+																}
+																string type = "INT";
+																if ($1->type == "BYTE" && $3->type == "BYTE")
+																	type = "BYTE";
+																if ($1->type == "SET" || $3->type == "SET"){//should we convert??? PIAZZA
+																	type = "SET";}
+																string sign = "";
+															  	$$ = new Exp("", type, freshVar());
+																string op = ($2->lex == "/" ? "div" : "mul"); 
+																if ($2->lex == "/"){
+																	sign = (type == "INT" ? "s" : "u");
+																	//cout<< "my val is " +  $3->var << endl;
+																	llvmdivByZero($3->var);
+																}
+																buffer.emit($$->var +  " = " + sign +llvmOp($2->lex) + " " + llvmType(type)+ " " +$1->var + ", " + $3->var);
+																if (type == "BYTE"){
+																	$$->var = llvmIntToByte($$->var);
+																}
+															}
+		|Exp ADD Exp										{printProductionRule(35);
+																if (!specialDup($1->type,$3->type)  &&
+																	$1->type == "BOOL"   || $3->type == "BOOL"   ||
+																	$1->type == "STRING" || $3->type == "STRING" ||
+																	($1->type == "SET"    && $3->type == "SET") ){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																int value = 0;
+																string type;
+																string newVar = freshVar();
+																if ($1->type == "SET"  || $3->type == "SET"){
+																	type = "SET";
+																	Exp * setNode = dynamic_cast<Exp*>(($1->type == "SET" ? $1 : $3));
+																	Exp * numNode = dynamic_cast<Exp*>(($1->type == "SET" ? $3 : $1));
+																	//Entry* s = getSymEntry(setNode->lex);
+																	llvmOutOfRange(setNode, numNode->var, $2->lex);//check out of range
+																	string setL   = setNode->setL;
+																	string setR   = setNode->setR;
+																	string newSetVar = llvmOpSet(setNode, $2->lex, $3->var);
+																	//cout<<" opset " << setNode->setL<< setNode->setR<<endl;
+																	
+																	$$ = new Exp("", "SET", newSetVar);
+																	$$->setL = setL;
+																	$$->setR = setR;
+																}
+																else{//INT or BYTE
+																	type = (($1->type == "BYTE" && $3->type == "BYTE") ? "BYTE" : "INT");
+																	$$ = new Exp("", type, newVar);
+																	buffer.emit($$->var +  " = " + llvmOp($2->lex) + " " + llvmType(type)+ " " + $1->var + ", " + $3->var);
+																	if (type == "BYTE"){
+																		$$->var = llvmIntToByte($$->var);
+																	}
+																}				
+															}
+		|ID                                                 {printProductionRule(36);
+																if(!Defined($1->lex, true)){
+																	errorUndef(yylineno, $1->lex);
+																	exit(0);
+																}
+																Entry * e = getSymEntry($1->lex);
+																//cout<< "my ID:" << $1->lex << " my type:" << e->type +"]"<<endl;
+																string ptr = llvmVarPtr(e->offset);
+																string newVar = freshVar();
+																string type = llvmType(e->type);
+																$$ = new Exp("", e->type, newVar);
+																$$->var = newVar;
+																if (e->type[0] == 'S'){//set
+																	$$->type = "SET";
+																	$$->setL = getSetL(e->type);
+																	$$->setR = getSetR(e->type);
+																	type = llvmSetType($$->setL,$$->setR);
+																	llvmLoadSet(newVar, $$->setL, $$->setR, ptr);
+																}else{
+																	
+																	buffer.emit(newVar + " = load " + type + ", " + type + "* " + ptr);
+																}
+																
+															//	cout << "[" + e->type + "]"<< endl;
+																
+																if (e->type == "BOOL"){
+																	string condVar = freshVar();
+																	buffer.emit(condVar + " = icmp eq i32 " + $$->var + ", 1");
+																	int loc = buffer.emit(llvmBrCond(condVar, "@", "@"));
+																	$$->trueList  = buffer.makelist({loc, FIRST});
+																	$$->falseList = buffer.makelist({loc, SECOND});
+																}
+															}
+		|Call                                               {printProductionRule(37);
+																$$ = new Exp($1->lex, $1->type, $1->var);
+																if ($1->type == "BOOL") {
+																	string icmp  = freshVar();
+																	buffer.emit(icmp +" = icmp eq i32 1, " + $1->var);
+																	int loc = buffer.emit(llvmBrCond(icmp, "@", "@"));
+																	$$->trueList  = buffer.makelist({loc, FIRST});
+																	$$->falseList = buffer.makelist({loc, SECOND});
+																}
+																else if ($1->type[0] == 'S'){
+																	$$->setL = $1->setL;
+																	$$->setR = $1->setR;
+																}
+															}
+		|NUM                                                {printProductionRule(38);
+																string var = freshVar();
+																buffer.emit(var + " = add i32 " + $1->lex + ", 0");
+																$$ = new Exp($1->lex, "INT", var);
+															}
+		|NUM B                                              	{printProductionRule(39);
+																int numValue = stoi($1->lex);
+																if (numValue > 255 || numValue < 0){
+																	errorByteTooLarge(yylineno, $1->lex);
+																	exit(0);
+																}
+																string constVar  = freshVar();
+																buffer.emit(constVar + " = add i32 " + $1->lex + ", 0");
+																string var = llvmIntToByte(constVar);
+																$$ = new Exp($1->lex, "BYTE", var);
+															}
+		|STRING                                             {printProductionRule(40);
+																string strVar = llvmString($1->lex);
+																$$ = new Exp("", "STRING", strVar);
+																//buffer.emit("my STRING SI" + strVar);
+															}
+		|TRUE                                               {printProductionRule(41);
+																$$ = new Exp("", "BOOL","");
+																int loc = llvmBr();
+																$$->trueList = buffer.makelist({loc, FIRST});
+															}
+		|FALSE                                              {printProductionRule(42);
+																$$ = new Exp("", "BOOL","");
+																int loc = buffer.emit("br label @");
+																$$->falseList = buffer.makelist({loc, FIRST});
+															}
+		|NOT Exp                                            {printProductionRule(43);
+																if ($2->type != "BOOL"){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																$$ = new Exp("", "BOOL", "");
+																$$->trueList  = $2->falseList;
+																$$->falseList = $2->trueList;
+															}
+		|Exp AND M Exp                 	           		    {printProductionRule(44);
+																if ($1->type != "BOOL" || $4->type != "BOOL"){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																$$ = new Exp("", "BOOL", "");
+																buffer.bpatch($1->trueList, $3->lex);
+																$$->falseList = buffer.merge($1->falseList, $4->falseList);
+																$$->trueList  = $4->trueList;
+															}
+		|Exp OR M Exp                                         {printProductionRule(45);
+																if ($1->type != "BOOL" || $4->type != "BOOL"){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																$$ = new Exp("", "BOOL", "");												
+																$$->trueList = buffer.merge($1->trueList, $4->trueList);
+																buffer.bpatch($1->falseList, $3->lex);
+																$$->falseList = $4->falseList;
+															}
+		|Exp RELOP Exp                                     	{printProductionRule(46);
+																if (($1->type != "INT" && $1->type != "BYTE")||//only 2 bytes, 2 ints, 1 int 1 byte
+																	($3->type != "INT" && $3->type != "BYTE")){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																$$ = new Exp("", "BOOL", "");
+																string op = llvmOp($2->lex);
+																string type = "";
+																if ($1->type == "INT" || $3->type == "INT"){
+																	op = "s" + op;
+																	type = llvmType("INT");
+																}else {
+																	op = "u" + op;
+																	type = llvmType("BYTE");
+																}
+																string result = freshVar();
+																buffer.emit(result + " = icmp " + op + " " + type + " " + $1->var + ", " + $3->var);
+																int loc = buffer.emit(llvmBrCond(result, "@","@"));
+																$$->trueList  = buffer.makelist({loc, FIRST });
+																$$->falseList = buffer.makelist({loc, SECOND});
+															}
+		|Exp IN Exp                                         {printProductionRule(46);
+																if (($1->type != "INT" && $1->type != "INT") ||
+																	$3->type != "SET"){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																$$ = new Exp("", "BOOL", "");
+																Exp* setNode = dynamic_cast<Exp*>($3);
+																string icmp = llvmInSet($1->var, setNode);
+																int loc = buffer.emit(llvmBrCond(icmp, "@", "@"));
+																$$->trueList  = buffer.makelist({loc, FIRST});
+																$$->falseList = buffer.makelist({loc, SECOND});
+															}
+		|Exp EQUALS Exp                                     {printProductionRule(46);
+																if (!(specialDup($1->type, $3->type)) &&
+																$1->type != $3->type){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																$$ = new Exp("", "BOOL", "");
+																string op = llvmOp($2->lex);
+																string type = "";
+																if ($1->type == "INT" || $3->type == "INT"){
+																	type = llvmType("INT");
+																}else {
+																	type = llvmType("BYTE");
+																}
+																string result = freshVar();
+																buffer.emit(result + " = icmp " + op + " " + type + " " + $1->var + ", " + $3->var);
+																int loc = buffer.emit(llvmBrCond(result, "@","@"));
+																$$->trueList  = buffer.makelist({loc, FIRST });
+																$$->falseList = buffer.makelist({loc, SECOND});
+															}
+		|LPAREN Type RPAREN Exp                             {printProductionRule(47);
+																if ($2->type != "INT" || $4->type != "SET"){
+																	errorMismatch(yylineno);
+																	exit(0);
+																}
+																
+																string newVar = llvmSetCast(dynamic_cast<Exp*>($4));
+																$$ = new Exp("", "INT", newVar);
+															}
+M:															{
+																$$ = new Node(buffer.genLabel(), "");
+															}
+N:															{
+																$$ = new Node("", "");
+																int loc = buffer.emit("br label @");
+																$$->nextList = buffer.makelist({loc, FIRST});
+															}
+
+%%
+
+int main()
+{
+	int out = yyparse();
+	finish();
+	return out;
+}
+
+void yyerror(const char* c){
+    errorSyn(yylineno);
+    exit(0);
+}
